@@ -1,46 +1,97 @@
 #!/usr/bin/env python
-# one file full load, seconds one line at a time
-import time
+from ConfigParser import ConfigParser
+from optparse import OptionParser
+from os import path
+from time import time
 
-PRIM_COL = 0
-DELIMITER = ','
-EXTRA_SRC = []
-UNMATCHED = []
-
-def csv_to_dict(fd, ret):
-    for i in fd:
-        vals = i.split(DELIMITER)
-        ret[vals[PRIM_COL]] = vals
-        
-def compare(fd):
-    global d
-    for i in fd:
-        rowitems = i.split(DELIMITER)
-        key = rowitems[PRIM_COL]
+# Generator yielding each set
+def get_set_data(configFile):
+    cfg = ConfigParser()
+    # Read file into object
+    cfg.read(configFile)
+    for eachSection in cfg.sections():
         try:
-            refvals = d[key]
+            yield (cfg.get(eachSection, "File1"),
+            cfg.get(eachSection, "File2"),
+            cfg.get(eachSection, "Delimiter"),
+            cfg.get(eachSection, "KeyIndex"))
+        except:
+            print "Error reading data from section : ", eachSection
+            yield None
+    
+# Method to convert data extract into dictionary
+def csv_to_dict(fd, ret, delimiter, primColIndex):
+    for i in fd:
+        vals = i.split(delimiter)
+        ret[vals[primColIndex]] = vals
+
+# Each line of the second file is compared against
+# the value stored for the primary column key 
+def compare(fd, delimiter, primColIndex):
+    global dataDict
+    file1_orphans = []
+    unmatched     = []
+    
+    for i in fd:
+        rowitems = i.split(delimiter)
+        key = rowitems[primColIndex]
+        try:
+            refvals = dataDict[key]
         except KeyError:
-            EXTRA_SRC.append(i)
-        else:            
+            file1_orphans.append(i)
+        else:
             for idx in range(len(refvals)):
                 if rowitems[idx] != refvals[idx]:
-                    UNMATCHED.append((i, DELIMITER.join(refvals)))
+                    unmatched.append((i, delimiter.join(refvals)))
                     break
-            del d[key]
+            del dataDict[key]
+            
+    return unmatched, file1_orphans
 
-
+# Parse the options passed to the script
 if __name__ == "__main__":
-    f1 = open("/home/supratim/Downloads/lahman2012-csv/Master.csv")
-    d  = dict()
-    f2 = open("/home/supratim/Downloads/lahman2012-csv/Master1.csv")
-    st = time.time()
-    csv_to_dict(f2, d)
-    f2.close()
-    print "Time to convert to dict : ", time.time()-st
-    st = time.time()
-    compare(f1)
-    print "Time to compare : ", time.time()-st
-    f1.close()
-    print "EXTRA_SRC : ", EXTRA_SRC
-    print "EXTRA_DST : ", d
-    print "UNMATCHED : ", UNMATCHED
+    parser = OptionParser()
+    parser.add_option("-i", "--input", dest="filename",
+                      help="Configuration file location",
+                      metavar="FILE")
+    (options, args) = parser.parse_args()
+    
+    # Check if configuration file exists
+    if options.filename and\
+        path.exists(options.filename) and\
+        path.isfile(options.filename) and\
+        path.splitext(options.filename)[-1].lower() in [".ini", ".cfg"]:
+        # Read each section of the configuration file and start
+        # comparison based on the input parameters
+        cfg_gen = get_set_data(options.filename)
+        while(True):
+            try:
+                file1, file2, delim, colIndex = cfg_gen.next()
+                # Considering 0 start index
+                colIndex = int(colIndex) - 1
+                dataDict = dict()
+                st  = time()
+                # Convert and update dataDict with table contents
+                fd2 = open(file2)
+                csv_to_dict(fd2, dataDict, delim, colIndex)
+                fd2.close()
+                print "\nComparing : %s and %s" %(file1, file2)
+                # Send file description for file1 to compare
+                fd1 = open(file2)
+                unmatched, file1_orphans = compare(fd1, delim, colIndex)
+                print "Completed! Time taken to compare : %.3f seconds"%(time()-st)
+                fd1.close()
+            except StopIteration:
+                print            
+                break
+            except Exception as ex:
+                print "Exception : ", str(ex)
+                break 
+            
+    else:
+        print """Error!! Could not proceed:\nReasons may include:\n-> \
+Configuration file not provided with -i option.\n-> Configuration file path \
+is invalid.\n-> Configuration file type is NOT ini or cfg."""
+        print "Usage : python %s -i <ConfigFilePath>"%(__file__)
+    exit(0)
+
